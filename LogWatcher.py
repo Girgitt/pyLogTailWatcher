@@ -67,7 +67,7 @@ class LogWatcher(object):
         self._checkpoint_files_map = {}
         self._callback = callback
         self._sizehint = sizehint
-        self._init_checkpoint = ('', 0, 0)
+        self._init_checkpoint = ('', 0, 0)  # signature, file_modification_time, last_read_offset
         assert os.path.isdir(self.folder), self.folder
         assert callable(callback), repr(callback)
         log.info("Started")
@@ -92,7 +92,12 @@ class LogWatcher(object):
             with self.open(file.name) as f:
                 f.seek(os.path.getsize(file.name))  # EOF
                 end_offset = f.tell()
-                self.save_checkpoint(file.name, (0, 0, end_offset))
+                self.save_checkpoint(file.name, self.get_checkpoint_tuple(file.name, 0, end_offset))
+
+    def get_checkpoint_tuple(self, fname, mtime=0, offset=0):
+        signature = self.make_sig(fname)
+        out_tuple = (signature, mtime, offset)
+        return out_tuple
 
     @staticmethod
     def slugify(value):
@@ -116,8 +121,9 @@ class LogWatcher(object):
             log.debug('loaded: %s %s', checkpoint_filename, (sig, mtime, offset))
             return sig, mtime, offset
         except (IOError, EOFError):
-            log.info('failed to load: %s; returning default checkpoint: %s' % (fname, self._init_checkpoint))
-            return self._init_checkpoint
+            log.info('failed to load: %s; returning default checkpoint: %s' % (fname, self.get_checkpoint_tuple(fname)))
+            #return self._init_checkpoint
+            return self.get_checkpoint_tuple(fname)
 
     def save_checkpoint(self, fname, checkpoint):
         checkpoint_filename = self.make_checkpoint_path_from_fname(fname)
@@ -128,7 +134,7 @@ class LogWatcher(object):
         try:
             os.unlink(self.make_checkpoint_path_from_fname(fname))
         except:
-            log.exception("could not delete checkpoint file for: %s" % fname)
+            log.info("could not delete checkpoint file for: %s" % fname)
 
     def make_checkpoint_path_from_fname(self, fname):
         return self.slugify(fname)+".checkpoint"
@@ -278,6 +284,8 @@ class LogWatcher(object):
                 sig, mtime, offset = self.load_checkpoint(file.name)
             else:
                 log.debug(" > used provided kwarg value")
+                sig = list(checkpoint)[0]
+                mtime = list(checkpoint)[1]
                 offset = list(checkpoint)[2]
 
             log.debug("<< loading checkpoint")
@@ -301,16 +309,16 @@ class LogWatcher(object):
                         if buff[-1].strip() == "":
                             del(buff[-1])
                             out_offset -= 1
-                        self.save_checkpoint(file.name, (0, 0, out_offset))
+                        self.save_checkpoint(file.name, self.get_checkpoint_tuple(file.name, offset=out_offset))
                         self._callback(f.name, buff)
             except IOError:
                 log.exception("failed to read input file: %s" % file.name)
+            else:  # no error in reading tail
+                return len(buff)
 
         except ValueError:
             log.exception("could not read lines from file: %s" % file.name)
             return 0
-
-        return len(buff)
 
     def readlines(self, file):
         """Read file lines since last access until EOF is reached and
@@ -365,9 +373,14 @@ class LogWatcher(object):
             rolled_file = self.open(rolled_file_name)
             backfilled_lines_count = 0
             #print("-->")
-            backfilled_lines_count = self.readlines_from_checkpoint(rolled_file, checkpoint=(sig, mtime, offset))
+            if sig == self.make_sig(rolled_file_name):
+                backfilled_lines_count = self.readlines_from_checkpoint(rolled_file, checkpoint=(sig, mtime, offset))
+            else:
+                log.warning("rolled file signature doesn't match")
+                del self._watched_files_map[fid]
+                return  #FIXME: checkpoint structure should keep the buffer length used to create file signature and readlines should skip non-matching checkpoint files
             #print("<--")
-            if backfilled_lines_count > 0:
+            if os.path.isfile(rolled_file_name):
                 self.delete_checkpoint_file(rolled_file_name)
             log.info("<< reading rotated file's tail")
         except IOError:
