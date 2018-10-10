@@ -293,7 +293,7 @@ class LogWatcher(object):
                         line = f.readline()
                         if not line:
                             break
-                        buff.append(line)
+                        buff.append(line.decode('utf-8'))
                         out_offset += len(line)
 
                     if out_offset != offset:
