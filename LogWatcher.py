@@ -284,24 +284,27 @@ class LogWatcher(object):
 
             out_offset = copy.copy(offset)
             log.debug("starting offset: %s" % offset)
-            with self.open(file.name) as f:
-                log.debug("seek to offset: %s" % offset)
-                f.seek(offset)
-                buff = []
-                while True:
-                    line = f.readline()
-                    if not line:
-                        break
-                    buff.append(line)
-                    out_offset += len(line)
+            try:
+                with self.open(file.name) as f:
+                    log.debug("seek to offset: %s" % offset)
+                    f.seek(offset)
+                    buff = []
+                    while True:
+                        line = f.readline()
+                        if not line:
+                            break
+                        buff.append(line)
+                        out_offset += len(line)
 
-                if out_offset != offset:
+                    if out_offset != offset:
 
-                    if buff[-1].strip() == "":
-                        del(buff[-1])
-                        out_offset -= 1
-                    self.save_checkpoint(file.name, (0, 0, out_offset))
-                    self._callback(f.name, buff)
+                        if buff[-1].strip() == "":
+                            del(buff[-1])
+                            out_offset -= 1
+                        self.save_checkpoint(file.name, (0, 0, out_offset))
+                        self._callback(f.name, buff)
+            except IOError:
+                log.exception("failed to read input file: %s" % file.name)
 
         except ValueError:
             log.exception("could not read lines from file: %s" % file.name)
