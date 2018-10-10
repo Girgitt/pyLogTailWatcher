@@ -367,7 +367,7 @@ class LogWatcher(object):
             if backfilled_lines_count > 0:
                 self.delete_checkpoint_file(rolled_file_name)
             log.info("<< reading rotated file's tail")
-        except ValueError:
+        except IOError:
             pass
 
         del self._watched_files_map[fid]
