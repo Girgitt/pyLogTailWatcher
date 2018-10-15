@@ -39,7 +39,7 @@ class LogWatcher(object):
     """
 
     def __init__(self, folder, callback, extensions=["log"], tail_lines=0,
-                       sizehint=1048576):
+                       sizehint=1048576, persistent_checkpoint=False):
         """Arguments:
 
         (str) @folder:
@@ -68,6 +68,8 @@ class LogWatcher(object):
         self._callback = callback
         self._sizehint = sizehint
         self._init_checkpoint = ('', 0, 0)  # signature, file_modification_time, last_read_offset
+        self._persistent_checkpoint = persistent_checkpoint
+        self._volatile_checkpoints = dict()
         assert os.path.isdir(self.folder), self.folder
         assert callable(callback), repr(callback)
         log.info("Started")
@@ -116,25 +118,43 @@ class LogWatcher(object):
     def load_checkpoint(self, fname):
         checkpoint_filename = self.make_checkpoint_path_from_fname(fname)
 
+        if self._persistent_checkpoint:
+            try:
+                sig, mtime, offset = pickle.load(open(checkpoint_filename, 'rb'))
+                log.debug('loaded: %s %s', checkpoint_filename, (sig, mtime, offset))
+                return sig, mtime, offset
+            except (IOError, EOFError):
+                log.info('failed to load: %s; returning default checkpoint: %s' % (fname, self.get_checkpoint_tuple(fname)))
+                #return self._init_checkpoint
+                return self.get_checkpoint_tuple(fname)
+
         try:
-            sig, mtime, offset = pickle.load(open(checkpoint_filename, 'rb'))
-            log.debug('loaded: %s %s', checkpoint_filename, (sig, mtime, offset))
-            return sig, mtime, offset
-        except (IOError, EOFError):
-            log.info('failed to load: %s; returning default checkpoint: %s' % (fname, self.get_checkpoint_tuple(fname)))
-            #return self._init_checkpoint
-            return self.get_checkpoint_tuple(fname)
+            return pickle.loads(self._volatile_checkpoints[checkpoint_filename])
+        except KeyError:
+            log.info("returning default checkpoint value")
+            return self._init_checkpoint
 
     def save_checkpoint(self, fname, checkpoint):
         checkpoint_filename = self.make_checkpoint_path_from_fname(fname)
         log.debug('dumping %s %s', checkpoint_filename, checkpoint)
-        return pickle.dump(checkpoint, open(checkpoint_filename, 'wb'))
+        if self._persistent_checkpoint:
+            return pickle.dump(checkpoint, open(checkpoint_filename, 'wb'))
+
+        self._volatile_checkpoints[checkpoint_filename] = pickle.dumps(checkpoint)
+        return True
 
     def delete_checkpoint_file(self, fname):
+        checkpoint_filename = self.make_checkpoint_path_from_fname(fname)
+        if self._persistent_checkpoint:
+            try:
+                os.unlink(checkpoint_filename)
+                return
+            except:
+                log.info("could not delete checkpoint file for: %s" % fname)
         try:
-            os.unlink(self.make_checkpoint_path_from_fname(fname))
-        except:
-            log.info("could not delete checkpoint file for: %s" % fname)
+            del self._volatile_checkpoints[checkpoint_filename]
+        except KeyError:
+            log.warning("could not delete volatile checkpoint definition for key: %s" % checkpoint_filename)
 
     def make_checkpoint_path_from_fname(self, fname):
         return self.slugify(fname)+".checkpoint"
@@ -294,6 +314,16 @@ class LogWatcher(object):
             log.debug("starting offset: %s" % offset)
             try:
                 with self.open(file.name) as f:
+
+                    f.seek(os.path.getsize(file.name))
+                    file_size = f.tell()
+                    if offset > file_size:
+                        log.error("file smaller than last offset; POSSIBLE DATA LOSS - ARE LOGS POLLED FREQUENTLY ENOUGH?")
+                        log.debug("offset: %s" % offset)
+                        log.debug("tell: %s" % file_size)
+                        offset = 0
+                        out_offset = 0
+
                     log.debug("seek to offset: %s" % offset)
                     f.seek(offset)
                     buff = []
