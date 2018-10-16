@@ -43,7 +43,7 @@ class LogWatcher(object):
     >>> lw.loop()
     """
 
-    def __init__(self, folder, callback, extensions=["log"], tail_lines=0,
+    def __init__(self, folder, callback, extensions=["log"], file_path=None, tail_lines=0,
                        sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ):
         """Arguments:
 
@@ -58,6 +58,9 @@ class LogWatcher(object):
         (list) @extensions:
             only watch files with these extensions
 
+        (str) @file_path:
+            path to a single file. If supplied the @folder arg is ignored and LogWatcher monitors only this single file
+
         (int) @tail_lines:
             read last N lines from files being watched before starting
 
@@ -68,6 +71,7 @@ class LogWatcher(object):
         """
         self.folder = os.path.realpath(folder)
         self.extensions = extensions
+        self._single_file_path = file_path
         self._watched_files_map = {}
         self._checkpoint_files_map = {}
         self._callback = callback
@@ -76,12 +80,12 @@ class LogWatcher(object):
         self._persistent_checkpoint = persistent_checkpoint
         self._volatile_checkpoints = dict()
         self._file_signature_size = file_signature_bytes
-        assert os.path.isdir(self.folder), self.folder
-        assert callable(callback), repr(callback)
         log.info("Started")
         log.info("folder: %s" % self.folder)
         log.info("extensions: %s" % self.extensions)
-
+        if self.is_single_file_mode:
+            assert os.path.isdir(self.folder), self.folder
+        assert callable(callback), repr(callback)
         self.update_files()
         self.update_checkpoints_to_point_to_end_of_files()
 
@@ -93,6 +97,12 @@ class LogWatcher(object):
 
     def __del__(self):
         self.close()
+
+    @property
+    def is_single_file_mode(self):
+        if self._single_file_path is None:
+            return False
+        return True
 
     def update_checkpoints_to_point_to_end_of_files(self):
         for id, file in self._watched_files_map.items():
@@ -193,6 +203,12 @@ class LogWatcher(object):
         You may want to override this to add extra logic or globbing
         support.
         """
+        if self.is_single_file_mode:
+            if os.path.isfile(self._single_file_path):
+                return [self._single_file_path]
+            log.error("provided single file path does not point to a file: %s" % self._single_file_path)
+            return []
+
         ls = os.listdir(self.folder)
         #log.debug(ls)
         #log.debug([os.path.splitext(x)[1][1:] for x in ls])
@@ -200,6 +216,7 @@ class LogWatcher(object):
             return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions]
         else:
             return ls
+
 
     @classmethod
     def open(cls, file_path):
