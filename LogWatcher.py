@@ -18,10 +18,15 @@ import regex
 import pickle
 import logging
 import binascii
+import portalocker
 
 SIG_SZ = 64
 
 log = logging.getLogger("watcher")
+
+
+class FileTooSmallToGetSignature(Exception):
+    pass
 
 
 class LogWatcher(object):
@@ -39,7 +44,7 @@ class LogWatcher(object):
     """
 
     def __init__(self, folder, callback, extensions=["log"], tail_lines=0,
-                       sizehint=1048576, persistent_checkpoint=False):
+                       sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ):
         """Arguments:
 
         (str) @folder:
@@ -70,6 +75,7 @@ class LogWatcher(object):
         self._init_checkpoint = ('', 0, 0)  # signature, file_modification_time, last_read_offset
         self._persistent_checkpoint = persistent_checkpoint
         self._volatile_checkpoints = dict()
+        self._file_signature_size = file_signature_bytes
         assert os.path.isdir(self.folder), self.folder
         assert callable(callback), repr(callback)
         log.info("Started")
@@ -91,7 +97,8 @@ class LogWatcher(object):
     def update_checkpoints_to_point_to_end_of_files(self):
         for id, file in self._watched_files_map.items():
             log.debug("updated checkpoint to point to end of file %s" % file.name)
-            with self.open(file.name) as f:
+            with self.open(str(file.name)) as f:
+                portalocker.lock(f, portalocker.LOCK_SH)
                 f.seek(os.path.getsize(file.name))  # EOF
                 end_offset = f.tell()
                 self.save_checkpoint(file.name, self.get_checkpoint_tuple(file.name, 0, end_offset))
@@ -195,7 +202,7 @@ class LogWatcher(object):
             return ls
 
     @classmethod
-    def open(cls, file):
+    def open(cls, file_path):
         """Wrapper around open().
         By default files are opened in binary mode and readlines()
         will return bytes on both Python 2 and 3.
@@ -207,7 +214,7 @@ class LogWatcher(object):
           return codecs.open(file, 'r', encoding=locale.getpreferredencoding(),
                              errors='ignore')
         """
-        return open(file, 'rb+')
+        return open(file_path, 'rb+')
 
     @classmethod
     def tail(cls, fname, window):
@@ -262,9 +269,11 @@ class LogWatcher(object):
                         log.debug("got possibly new file: %s" % absname)
                         ls.append((fid, absname))
                         break
-                    except IOError:
+                    except (IOError, WindowsError):
                         log.warning("had to repeat getting file ID while adding to list of files to watch")
                         time.sleep(0.1)
+                    except FileTooSmallToGetSignature:
+                        log.warning("file too small to calculate signature: %s" % absname)
 
 
         # check existent files
@@ -278,11 +287,18 @@ class LogWatcher(object):
                 else:
                     raise
             else:  # no error occurred
-                if fid != self.get_file_id(file.name):
-                    # same name but different file (rotation); reload it.
-                    log.info("reloading file due to rotation: %s" % file.name)
+                try:
+                    if fid != self.get_file_id(file.name):
+                        # same name but different file (rotation); reload it.
+                        log.info("reloading file due to rotation: %s" % file.name)
+                        self.unwatch(file, fid)
+                        self.watch(file.name)
+                except FileTooSmallToGetSignature:
+                    log.warning("file too small to re-watch it; will just unwatch")
                     self.unwatch(file, fid)
-                    self.watch(file.name)
+                except (IOError, WindowsError):
+                    log.exception("file access error; will just unwatch")
+                    self.unwatch(file, fid)
 
         # add new ones
         for fid, fname in ls:
@@ -290,7 +306,12 @@ class LogWatcher(object):
             log.debug("already added files: %s" % str(self._watched_files_map.keys()))
             if fid not in self._watched_files_map:
                 log.debug("adding new file to watch: %s" % fname)
-                self.watch(fname)
+                try:
+                    self.watch(fname)
+                except (IOError, WindowsError):
+                    log.exception("file access error; will not add new file to watch")
+                except FileTooSmallToGetSignature:
+                    log.exception("file too small to be added for watching")
 
         log.debug("self._files_map after update: %s" % str(self._watched_files_map))
 
@@ -313,8 +334,10 @@ class LogWatcher(object):
             out_offset = copy.copy(offset)
             log.debug("starting offset: %s" % offset)
             try:
+                buff = []
+                lines_read = False
                 with self.open(file.name) as f:
-
+                    portalocker.lock(f, portalocker.LOCK_SH)
                     f.seek(os.path.getsize(file.name))
                     file_size = f.tell()
                     if offset > file_size:
@@ -326,7 +349,7 @@ class LogWatcher(object):
 
                     log.debug("seek to offset: %s" % offset)
                     f.seek(offset)
-                    buff = []
+
                     while True:
                         line = f.readline()
                         if not line:
@@ -339,16 +362,21 @@ class LogWatcher(object):
                         if buff[-1].strip() == "":
                             del(buff[-1])
                             out_offset -= 1
-                        self.save_checkpoint(file.name, self.get_checkpoint_tuple(file.name, offset=out_offset))
-                        self._callback(f.name, buff)
+                        lines_read = True
+
+                if lines_read:
+                    self.save_checkpoint(file.name, self.get_checkpoint_tuple(file.name, offset=out_offset))
+                    self._callback(file.name, buff)
+
             except IOError:
                 log.exception("failed to read input file: %s" % file.name)
+                return False
             else:  # no error in reading tail
                 return len(buff)
 
         except ValueError:
             log.exception("could not read lines from file: %s" % file.name)
-            return 0
+            return False
 
     def readlines(self, file):
         """Read file lines since last access until EOF is reached and
@@ -356,6 +384,7 @@ class LogWatcher(object):
         """
         try:
             with self.open(file.name) as f:
+                portalocker.lock(f, portalocker.LOCK_SH)
                 while True:
                     lines = f.readlines(self._sizehint)
                     if not lines:
@@ -368,15 +397,17 @@ class LogWatcher(object):
     def watch(self, fname):
         log.info(">> watch: %s" % fname)
         try:
-            file = self.open(fname)
-            fid = self.get_file_id(fname)
+            with self.open(fname) as f:
+                portalocker.lock(f, portalocker.LOCK_SH)
+                fid = self.get_file_id(fname)
+                self._watched_files_map[fid] = f
+                self._watched_files_map[fid].close()
+                log.info("watching logfile %s" % fname)
         except EnvironmentError as err:
             if err.errno != errno.ENOENT:
                 raise
-        else:
-            log.info("watching logfile %s" % fname)
-            self._watched_files_map[fid] = file
-            self._watched_files_map[fid].close()
+        except FileTooSmallToGetSignature:
+            raise
 
     def unwatch(self, file, fid):
         # File no longer exists. If it has been renamed try to read it
@@ -400,19 +431,23 @@ class LogWatcher(object):
             sig, mtime, offset = self.load_checkpoint(file.name)
             log.info(">> reading rotated file's tail")
             rolled_file_name = file.name+".1"
-            rolled_file = self.open(rolled_file_name)
-            backfilled_lines_count = 0
-            #print("-->")
-            if sig == self.make_sig(rolled_file_name):
-                backfilled_lines_count = self.readlines_from_checkpoint(rolled_file, checkpoint=(sig, mtime, offset))
-            else:
-                log.warning("rolled file signature doesn't match")
-                del self._watched_files_map[fid]
-                return  #FIXME: checkpoint structure should keep the buffer length used to create file signature and readlines should skip non-matching checkpoint files
-            #print("<--")
-            if os.path.isfile(rolled_file_name):
-                self.delete_checkpoint_file(rolled_file_name)
-            log.info("<< reading rotated file's tail")
+            with self.open(rolled_file_name) as rolled_file:
+                portalocker.lock(rolled_file, portalocker.LOCK_SH)
+                backfilled_lines_count = 0
+                #print("-->")
+                if sig == self.make_sig(rolled_file_name):
+                    backfilled_lines_count = self.readlines_from_checkpoint(rolled_file, checkpoint=(sig, mtime, offset))
+                else:
+                    log.warning("rolled file signature doesn't match")
+                    try:
+                        del self._watched_files_map[fid]
+                    except KeyError:
+                        pass
+                    return  #FIXME: checkpoint structure should keep the buffer length used to create file signature and readlines should skip non-matching checkpoint files
+                #print("<--")
+                if os.path.isfile(rolled_file_name):
+                    self.delete_checkpoint_file(rolled_file_name)
+                log.info("<< reading rotated file's tail")
         except IOError:
             pass
 
@@ -421,6 +456,9 @@ class LogWatcher(object):
 
     def get_file_id(self, fname):
         st = os.stat(fname)
+        file_size = os.path.getsize(fname)
+        if file_size < self._file_signature_size:
+            raise FileTooSmallToGetSignature
         if os.name == 'posix':
             return "%xg%x" % (st.st_dev, st.st_ino)
         else:
@@ -473,7 +511,7 @@ if __name__ == '__main__':
             self.filename = []
             self.lines = []
             self.file = open(TESTFN, 'w')
-            self.watcher = LogWatcher(os.getcwd(), callback)
+            self.watcher = LogWatcher(os.getcwd(), callback, file_signature_bytes=1)
 
         def tearDown(self):
             self.watcher.close()
