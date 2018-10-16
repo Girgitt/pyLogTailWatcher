@@ -13,13 +13,13 @@ def create_rotating_log(path):
     logger.setLevel(logging.INFO)
 
     # add a rotating handler
-    handler = RotatingFileHandler(path, maxBytes=255,
+    handler = RotatingFileHandler(path, maxBytes=1024,
                                   backupCount=5)
     logger.addHandler(handler)
 
-    for i in range(102):
+    for i in range(1024):
         logger.info("This is test log line %s" % i)
-        time.sleep(0.2)
+        time.sleep(0.05)
 
 
 # ----------------------------------------------------------------------
