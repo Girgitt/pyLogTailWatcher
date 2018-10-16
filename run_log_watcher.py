@@ -11,7 +11,7 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 log.propagate = False
 
 
-def callback(filename, lines, filter_file_name=None):
+def callback(filename, lines):
     log.debug(">>> %s" % filename)
     prev_line_number = None
 
@@ -24,7 +24,7 @@ def callback(filename, lines, filter_file_name=None):
             prev_line_number = line_number
             continue
         lines_diff = line_number - prev_line_number
-        if lines_diff> 1:
+        if lines_diff > 1:
             print("MISSING LINES: %s" % lines_diff)
         prev_line_number = line_number
 

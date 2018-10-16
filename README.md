@@ -5,7 +5,7 @@ Extended version from https://code.activestate.com/recipes/577968-log-watcher-ta
 
 2. supporting files rotation (to prevent missing tail of rotated file)
 
-###why another tail in python?
+### Why another tail in python?
 Well, none of the promising modules I tried (pygtail, tailchaser) worked on Windows 10 with python 2.7. Mainly for these resons: 
 
 1. Files were identified by st_ino from os.stat which does not work reliably on Windows ([pygtail](https://github.com/bgreenlee/pygtail/blob/bd93577fc760d22ad7207621ce8dd9f7f76a6a67/pygtail/core.py#L190))
@@ -17,7 +17,7 @@ storage for the checkpoint data which may be what you want if the tail is suppos
 but it was not my intended purpose - to stream new lines to whatever python-compatible endpoint (rest, redis, database). 
 When tailing module is a part of a log watching process a persistent storage is not necessary required.  
 
-###example
+### Example
 In terminal 1 run `python run_test_rotate.py`
 
 In terminal 2 run `python run_log_watcher.py`
