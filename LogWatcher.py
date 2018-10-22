@@ -332,7 +332,7 @@ class LogWatcher(object):
 
         log.debug("self._files_map after update: %s" % str(self._watched_files_map))
 
-    def readlines_from_checkpoint(self, file, checkpoint=None):
+    def readlines_from_checkpoint(self, file, checkpoint=None, overloaded_file_name=None):
         """Read file lines since last access until EOF is reached and
         invoke callback.
         """
@@ -383,7 +383,10 @@ class LogWatcher(object):
 
                 if lines_read:
                     self.save_checkpoint(file.name, self.get_checkpoint_tuple(file.name, offset=out_offset))
-                    self._callback(file.name, buff)
+                    if overloaded_file_name is None:
+                        self._callback(file.name, buff)
+                    else:
+                        self._callback(overloaded_file_name, buff)
 
             except IOError:
                 log.exception("failed to read input file: %s" % file.name)
@@ -453,7 +456,9 @@ class LogWatcher(object):
                 backfilled_lines_count = 0
                 #print("-->")
                 if sig == self.make_sig(rolled_file_name):
-                    backfilled_lines_count = self.readlines_from_checkpoint(rolled_file, checkpoint=(sig, mtime, offset))
+                    backfilled_lines_count = self.readlines_from_checkpoint(rolled_file,
+                                                                            checkpoint=(sig, mtime, offset),
+                                                                            overloaded_file_name=file.name)
                 else:
                     log.warning("rolled file signature doesn't match")
                     try:
