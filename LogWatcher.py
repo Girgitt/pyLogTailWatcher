@@ -90,7 +90,8 @@ class LogWatcher(object):
             assert os.path.isdir(self.folder), self.folder
         assert callable(callback), repr(callback)
         self.update_files()
-        self.update_checkpoints_to_point_to_end_of_files()
+        if not self._persistent_checkpoint:
+            self.update_checkpoints_to_point_to_end_of_files()
 
     def __enter__(self):
         return self
@@ -364,6 +365,10 @@ class LogWatcher(object):
                         log.error("file smaller than last offset; POSSIBLE DATA LOSS - ARE LOGS POLLED FREQUENTLY ENOUGH?")
                         log.debug("offset: %s" % offset)
                         log.debug("tell: %s" % file_size)
+                        if self._persistent_checkpoint:
+                            log.info("trying to unwatch to read tail of rotated file")
+                            self.unwatch(file, self.get_file_id(file.name))
+                            return
                         offset = 0
                         out_offset = 0
 
@@ -460,6 +465,8 @@ class LogWatcher(object):
             #log.info(" > ls: %s" % str(ls))
             rotation_suffixes = []
             if self._deterministic_rotation:
+                # FIXME: deterministic rotation enables back-fill from many rotated files - rotation_suffixes could be
+                #        reverse-sorted and all rotated files newer than one with matching signature read completely
                 rotation_suffixes = [1]
             else:
                 for file_name in ls:
@@ -471,7 +478,7 @@ class LogWatcher(object):
                             pass
             log.info(" > rotation_suffixes: %s" % str(rotation_suffixes))
 
-            for rotation_suffix in sorted(rotation_suffixes, reverse=True):
+            for rotation_suffix in sorted(rotation_suffixes, reverse=False):
                 rolled_file_name = file.name+".%s" % rotation_suffix
 
                 with self.open(rolled_file_name) as rolled_file:
