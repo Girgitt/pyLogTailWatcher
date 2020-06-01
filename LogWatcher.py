@@ -44,7 +44,8 @@ class LogWatcher(object):
     """
 
     def __init__(self, folder, callback, extensions=["log"], file_path=None, tail_lines=0,
-                       sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ, mask_rotated_file_name=True):
+                 sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ,
+                 mask_rotated_file_name=True, deterministic_rotation=True):
         """Arguments:
 
         (str) @folder:
@@ -81,6 +82,7 @@ class LogWatcher(object):
         self._volatile_checkpoints = dict()
         self._file_signature_size = file_signature_bytes
         self._mask_rotated_file_name = mask_rotated_file_name
+        self._deterministic_rotation = deterministic_rotation
         log.info("Started")
         log.info("folder: %s" % self.folder)
         log.info("extensions: %s" % self.extensions)
@@ -451,34 +453,56 @@ class LogWatcher(object):
         try:
             sig, mtime, offset = self.load_checkpoint(file.name)
             log.info(">> reading rotated file's tail")
-            rolled_file_name = file.name+".1"
-            with self.open(rolled_file_name) as rolled_file:
-                portalocker.lock(rolled_file, portalocker.LOCK_SH)
-                backfilled_lines_count = 0
-                #print("-->")
-                if sig == self.make_sig(rolled_file_name):
-                    overloaded_file_name = file.name
-                    if not self._mask_rotated_file_name:
-                        overloaded_file_name = None
 
-                    backfilled_lines_count = self.readlines_from_checkpoint(rolled_file,
-                                                                            checkpoint=(sig, mtime, offset),
-                                                                            overloaded_file_name=overloaded_file_name)
-                else:
-                    log.warning("rolled file signature doesn't match")
-                    try:
-                        del self._watched_files_map[fid]
-                    except KeyError:
-                        pass
-                    return  #FIXME: checkpoint structure should keep the buffer length used to create file signature and readlines should skip non-matching checkpoint files
-                #print("<--")
-                if os.path.isfile(rolled_file_name):
-                    self.delete_checkpoint_file(rolled_file_name)
-                log.info("<< reading rotated file's tail")
+            log_base_name = os.path.split(file.name)[-1]
+            #log.info(" > log_base_name: %s" % log_base_name)
+            ls = os.listdir(self.folder)
+            #log.info(" > ls: %s" % str(ls))
+            rotation_suffixes = []
+            if self._deterministic_rotation:
+                rotation_suffixes = [1]
+            else:
+                for file_name in ls:
+                    if log_base_name in file_name:
+                        try:
+                            suffix = int(file_name.split(".")[-1])
+                            rotation_suffixes.append(suffix)
+                        except ValueError:
+                            pass
+            log.info(" > rotation_suffixes: %s" % str(rotation_suffixes))
+
+            for rotation_suffix in sorted(rotation_suffixes, reverse=True):
+                rolled_file_name = file.name+".%s" % rotation_suffix
+
+                with self.open(rolled_file_name) as rolled_file:
+                    portalocker.lock(rolled_file, portalocker.LOCK_SH)
+                    backfilled_lines_count = 0
+                    #print("-->")
+                    if sig == self.make_sig(rolled_file_name):
+                        overloaded_file_name = file.name
+                        if not self._mask_rotated_file_name:
+                            overloaded_file_name = None
+
+                        backfilled_lines_count = self.readlines_from_checkpoint(rolled_file,
+                                                                                checkpoint=(sig, mtime, offset),
+                                                                                overloaded_file_name=overloaded_file_name)
+                        if os.path.isfile(rolled_file_name):
+                            self.delete_checkpoint_file(rolled_file_name)
+                        break
+
+                    else:
+                        log.warning("rolled file signature doesn't match file: %s" % rolled_file_name)
+                        if os.path.isfile(rolled_file_name):
+                            self.delete_checkpoint_file(rolled_file_name)
+                        continue
+
+            log.info("<< reading rotated file's tail")
         except IOError:
             pass
-
-        del self._watched_files_map[fid]
+        try:
+            del self._watched_files_map[fid]
+        except KeyError:
+            pass
         self.delete_checkpoint_file(file.name)
 
     def get_file_id(self, fname):
