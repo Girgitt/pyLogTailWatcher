@@ -44,7 +44,7 @@ class LogWatcher(object):
     """
 
     def __init__(self, folder, callback, extensions=["log"], file_path=None, tail_lines=0,
-                       sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ):
+                       sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ, mask_rotated_file_name=True):
         """Arguments:
 
         (str) @folder:
@@ -80,6 +80,7 @@ class LogWatcher(object):
         self._persistent_checkpoint = persistent_checkpoint
         self._volatile_checkpoints = dict()
         self._file_signature_size = file_signature_bytes
+        self._mask_rotated_file_name = mask_rotated_file_name
         log.info("Started")
         log.info("folder: %s" % self.folder)
         log.info("extensions: %s" % self.extensions)
@@ -456,9 +457,13 @@ class LogWatcher(object):
                 backfilled_lines_count = 0
                 #print("-->")
                 if sig == self.make_sig(rolled_file_name):
+                    overloaded_file_name = file.name
+                    if not self._mask_rotated_file_name:
+                        overloaded_file_name = None
+
                     backfilled_lines_count = self.readlines_from_checkpoint(rolled_file,
                                                                             checkpoint=(sig, mtime, offset),
-                                                                            overloaded_file_name=file.name)
+                                                                            overloaded_file_name=overloaded_file_name)
                 else:
                     log.warning("rolled file signature doesn't match")
                     try:

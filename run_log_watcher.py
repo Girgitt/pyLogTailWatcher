@@ -31,7 +31,10 @@ def callback(filename, lines):
     log.debug("<<< %s" % filename)
 
 
-watcher = LogWatcher(os.path.dirname("./"), callback, ["log"], persistent_checkpoint=False)
+watcher = LogWatcher(os.path.dirname("./"), callback, ["log"],
+                     persistent_checkpoint=False,
+                     mask_rotated_file_name=False,
+                     file_signature_bytes=32)
 
 
 while True:
