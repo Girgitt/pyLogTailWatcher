@@ -485,14 +485,15 @@ class LogWatcher(object):
                 for file_name in ls:
                     if log_base_name in file_name:
                         try:
-                            suffix = int(file_name.split(".")[-1])
-                            rotation_suffixes.append(suffix)
+                            suffix = file_name.split(log_base_name)[-1]
+                            if len(suffix) > 0:
+                                rotation_suffixes.append(suffix)
                         except ValueError:
                             pass
             log.info(" > rotation_suffixes: %s" % str(rotation_suffixes))
 
             for rotation_suffix in sorted(rotation_suffixes, reverse=False):
-                rolled_file_name = file.name+".%s" % rotation_suffix
+                rolled_file_name = file.name+"%s" % rotation_suffix
 
                 with self.open(rolled_file_name) as rolled_file:
                     portalocker.lock(rolled_file, portalocker.LOCK_SH)
