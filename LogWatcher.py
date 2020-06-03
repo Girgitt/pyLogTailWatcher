@@ -14,6 +14,7 @@ import errno
 import stat
 import sys
 import copy
+import codecs
 import regex
 import pickle
 import logging
@@ -83,6 +84,7 @@ class LogWatcher(object):
         self._file_signature_size = file_signature_bytes
         self._mask_rotated_file_name = mask_rotated_file_name
         self._deterministic_rotation = deterministic_rotation
+        self._file_update_first_pass = True
         log.info("Started")
         log.info("folder: %s" % self.folder)
         log.info("extensions: %s" % self.extensions)
@@ -287,11 +289,11 @@ class LogWatcher(object):
                 for tries_count in range(3):
                     try:
                         fid = self.get_file_id(absname)
-                        log.debug("got possibly new file: %s" % absname)
+                        log.debug("got possibly new file: %s (fid: %s)" % (absname, fid))
                         ls.append((fid, absname))
                         break
-                    except (IOError, WindowsError):
-                        log.warning("had to repeat getting file ID while adding to list of files to watch")
+                    except (IOError, WindowsError) as e:
+                        log.exception("had to repeat getting file ID while adding to list of files to watch")
                         time.sleep(0.1)
                     except FileTooSmallToGetSignature:
                         log.warning("file too small to calculate signature: %s" % absname)
@@ -333,7 +335,11 @@ class LogWatcher(object):
                     log.exception("file access error; will not add new file to watch")
                 except FileTooSmallToGetSignature:
                     log.exception("file too small to be added for watching")
+            else:
+                if self._file_update_first_pass:
+                    log.warning("%s - file already added - if this is not expected check the signature size" % fname)
 
+        self._file_update_first_pass = False
         log.debug("self._files_map after update: %s" % str(self._watched_files_map))
 
     def readlines_from_checkpoint(self, file, checkpoint=None, overloaded_file_name=None):
@@ -357,7 +363,7 @@ class LogWatcher(object):
             try:
                 buff = []
                 lines_read = False
-                with self.open(file.name) as f:
+                with codecs.open(file.name, mode='rb', encoding='utf8', errors='replace') as f:
                     portalocker.lock(f, portalocker.LOCK_SH)
                     f.seek(os.path.getsize(file.name))
                     file_size = f.tell()
@@ -379,7 +385,10 @@ class LogWatcher(object):
                         line = f.readline()
                         if not line:
                             break
-                        buff.append(line.decode('utf-8'))
+                        try:
+                            buff.append(line.decode('utf-8'))
+                        except UnicodeDecodeError:
+                            log.exception("could not add line to file %s" % file)
                         out_offset += len(line)
 
                     if out_offset != offset:
@@ -423,14 +432,14 @@ class LogWatcher(object):
             return
 
     def watch(self, fname):
-        log.info(">> watch: %s" % fname)
+        log.debug(">> watch: %s" % fname)
         try:
             with self.open(fname) as f:
                 portalocker.lock(f, portalocker.LOCK_SH)
                 fid = self.get_file_id(fname)
                 self._watched_files_map[fid] = f
                 self._watched_files_map[fid].close()
-                log.info("watching logfile %s" % fname)
+                log.info("watching logfile %s (fid: %s)" % (fname, fid))
         except EnvironmentError as err:
             if err.errno != errno.ENOENT:
                 raise
@@ -522,15 +531,16 @@ class LogWatcher(object):
         else:
             return "%f_%s" % (st.st_ctime, self.make_sig(fname))
 
-    @classmethod
-    def make_sig(cls, file_to_check, stat=None):
-        with cls.open(file_to_check) as fh:
-            return cls.sig(fh)
+    def make_sig(self, file_to_check, stat=None):
+        with self.open(file_to_check) as fh:
+            log.debug("signature for %s" % file_to_check)
+            return self.sig(fh)
             # return hashlib.sha224(open(file_to_check).read(SIG_SZ)).hexdigest()
 
-    @classmethod
-    def sig(cls, file_to_check_fh, stat=None):
-        return str(binascii.crc32(file_to_check_fh.read(SIG_SZ)) & 0xffffffff)
+    def sig(self, file_to_check_fh, stat=None):
+        sig = str(binascii.crc32(file_to_check_fh.read(self._file_signature_size)) & 0xffffffff)
+        log.debug("  \\ %s (size: %s)" % (sig, self._file_signature_size))
+        return sig
 
     def close(self):
         for id, file in self._watched_files_map.items():
