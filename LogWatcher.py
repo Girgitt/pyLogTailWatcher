@@ -46,7 +46,7 @@ class LogWatcher(object):
 
     def __init__(self, folder, callback, extensions=["log"], file_path=None, tail_lines=0,
                  sizehint=1048576, persistent_checkpoint=False, file_signature_bytes=SIG_SZ,
-                 mask_rotated_file_name=True, deterministic_rotation=True):
+                 mask_rotated_file_name=True, deterministic_rotation=True, strict_extension_check=True):
         """Arguments:
 
         (str) @folder:
@@ -84,6 +84,7 @@ class LogWatcher(object):
         self._file_signature_size = file_signature_bytes
         self._mask_rotated_file_name = mask_rotated_file_name
         self._deterministic_rotation = deterministic_rotation
+        self._strict_extension_check = strict_extension_check
         self._file_update_first_pass = True
         log.info("Started")
         log.info("folder: %s" % self.folder)
@@ -219,7 +220,10 @@ class LogWatcher(object):
         #log.debug(ls)
         #log.debug([os.path.splitext(x)[1][1:] for x in ls])
         if self.extensions:
-            return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions]
+            if self._strict_extension_check:
+                return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions and '.' not in os.path.splitext(x)[1][1:]]
+            else:
+                return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions]
         else:
             return ls
 

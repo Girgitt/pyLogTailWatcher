@@ -35,7 +35,8 @@ watcher = LogWatcher(os.path.dirname("./"), callback, ["log"],
                      persistent_checkpoint=True,
                      mask_rotated_file_name=False,
                      deterministic_rotation=False,
-                     file_signature_bytes=32)
+                     file_signature_bytes=32,
+                     strict_extension_check=True)
 
 
 while True:
