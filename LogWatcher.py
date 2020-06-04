@@ -286,10 +286,14 @@ class LogWatcher(object):
                 st = os.stat(absname)
             except EnvironmentError as err:
                 if err.errno != errno.ENOENT:
-                    raise
+                    log.exception("could not access matching file: %s" % name)
+                    continue
+            except Exception as err:
+                log.exception("could not access matching file %s; reason: %s" % (name, err.message))
+                continue
             else:  # no error occurred
                 if not stat.S_ISREG(st.st_mode):
-                    continue
+                    continue  # it's not a regular file
                 for tries_count in range(3):
                     try:
                         fid = self.get_file_id(absname)
