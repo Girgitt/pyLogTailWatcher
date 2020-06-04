@@ -221,7 +221,7 @@ class LogWatcher(object):
         #log.debug([os.path.splitext(x)[1][1:] for x in ls])
         if self.extensions:
             if self._strict_extension_check:
-                return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions and '.' not in os.path.splitext(x)[1][1:]]
+                return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions and '.' not in os.path.splitext(x)[0]]
             else:
                 return [x for x in ls if os.path.splitext(x)[1][1:] in self.extensions]
         else:
