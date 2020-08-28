@@ -394,7 +394,7 @@ class LogWatcher(object):
                         if not line:
                             break
                         try:
-                            buff.append(line.decode('utf-8'))
+                            buff.append(line)
                         except UnicodeDecodeError:
                             log.exception("could not add line to file %s" % file)
                         out_offset += len(line)
