@@ -5,6 +5,8 @@ Extended version from https://code.activestate.com/recipes/577968-log-watcher-ta
 
 2. supporting files rotation (to prevent missing tail of rotated file)
 
+3. supporting persistent checkpoints (optional; useful when code is used by a tail service which should not skip lines on restart)
+
 ### Why another tail in python?
 Well, none of the promising modules I tried (pygtail, tailchaser) worked on Windows 10 with python 2.7. Mainly for these resons: 
 
